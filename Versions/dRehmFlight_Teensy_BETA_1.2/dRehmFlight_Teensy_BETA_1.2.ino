@@ -66,7 +66,12 @@ RcGroups 'jihlein' - IMU implementation overhaul + SBUS implementation
 //#define ACCEL_8G
 //#define ACCEL_16G
 
+#define SERIAL_OUTPUT_INTERVAL 10000        //  in micros() - ie 10000 = 100hz
 
+#define SERIAL_WEBSERVER       // uncomment this if using dRehmFlight webserver to tweak settings
+#define WEBSERVER_SERIAL_SPEED 115000
+#define WEBSERVER_PING_RETRIES 50       // delay of 100ms between retries
+#define MAX_DREHM_VARIABLES 100
 
 //========================================================================================================================//
 
@@ -241,7 +246,10 @@ PWMServo servo5;
 PWMServo servo6;
 PWMServo servo7;
 
-
+#ifdef SERIAL_WEBSERVER
+const int webServerPinRx = 25;
+const int webServerPinTx = 24;
+#endif
 
 //========================================================================================================================//
 
@@ -298,6 +306,20 @@ float s1_command_scaled, s2_command_scaled, s3_command_scaled, s4_command_scaled
 int s1_command_PWM, s2_command_PWM, s3_command_PWM, s4_command_PWM, s5_command_PWM, s6_command_PWM, s7_command_PWM;
 
 
+#ifdef SERIAL_WEBSERVER
+bool webserverOK = false;
+String dRehmVarType[MAX_DREHM_VARIABLES];
+String dRehmVarName[MAX_DREHM_VARIABLES];
+int* dRehmIntPtr[MAX_DREHM_VARIABLES];
+float* dRehmFloatPtr[MAX_DREHM_VARIABLES];
+char* dRehmStrPtr[MAX_DREHM_VARIABLES];
+int dRehmVariableCnt = 0;
+
+// used for testing of webserver initial setup 
+int serialTesti = 0;
+float serialTestf = 0.0f;
+char serialTestc[10];
+#endif
 
 //========================================================================================================================//
 //                                                      VOID SETUP                                                        //                           
@@ -305,7 +327,11 @@ int s1_command_PWM, s2_command_PWM, s3_command_PWM, s4_command_PWM, s5_command_P
 
 void setup() {
   Serial.begin(500000); //usb serial
-  delay(3000); //3 second delay for plugging in battery before IMU calibration begins, feel free to comment this out to reduce boot time
+#ifdef SERIAL_WEBSERVER
+  Serial6.begin(WEBSERVER_SERIAL_SPEED);
+  setupWebserver();
+#endif
+  delay(3000);                //3 second delay for plugging in battery before IMU calibration begins, feel free to comment this out to reduce boot time
   
   //Initialize all pins
   pinMode(13, OUTPUT); //pin 13 LED blinker on board, do not modify 
@@ -395,7 +421,7 @@ void loop() {
 
   loopBlink(); //indicate we are in main loop with short blink every 1.5 seconds
 
-  //Print data at 100hz (uncomment one at a time for troubleshooting) - SELECT ONE:
+  //Print data at 1M/SERIAL_OUTPUT_INTERVAL hz (uncomment one at a time for troubleshooting) - SELECT ONE:
   //printRadioData();     //radio pwm values (expected: 1000 to 2000)
   //printDesiredState();  //prints desired vehicle state commanded in either degrees or deg/sec (expected: +/- maxAXIS for roll, pitch, yaw; 0 to 1 for throttle)
   //printGyroData();      //prints filtered gyro data direct from IMU (expected: ~ -250 to 250, 0 at rest)
@@ -406,6 +432,10 @@ void loop() {
   //printMotorCommands(); //prints the values being written to the motors (expected: 120 to 250)
   //printServoCommands(); //prints the values being written to the servos (expected: 0 to 180)
   //printLoopRate();      //prints the time between loops in microseconds (expected: microseconds between loop iterations)
+#ifdef SERIAL_WEBSERVER
+  if (webserverOK)
+    updateWebserverActions();   //receives data from the serial port and changes appropriate globals
+#endif
 
   //Get vehicle state
   getIMUdata(); //pulls raw gyro, accelerometer, and magnetometer data from IMU and LP filters to remove noise
@@ -1424,7 +1454,7 @@ void setupBlink(int numBlinks,int upTime, int downTime) {
 }
 
 void printRadioData() {
-  if (current_time - print_counter > 10000) {
+  if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F(" CH1: "));
     Serial.print(channel_1_pwm);
@@ -1442,7 +1472,7 @@ void printRadioData() {
 }
 
 void printDesiredState() {
-  if (current_time - print_counter > 10000) {
+  if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("thro_des: "));
     Serial.print(thro_des);
@@ -1456,7 +1486,7 @@ void printDesiredState() {
 }
 
 void printGyroData() {
-    if (current_time - print_counter > 10000) {
+    if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("GyroX: "));
     Serial.print(GyroX);
@@ -1468,7 +1498,7 @@ void printGyroData() {
 }
 
 void printAccelData() {
-    if (current_time - print_counter > 10000) {
+    if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("AccX: "));
     Serial.print(AccX);
@@ -1480,7 +1510,7 @@ void printAccelData() {
 }
 
 void printMagData() {
-    if (current_time - print_counter > 10000) {
+    if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("MagX: "));
     Serial.print(MagX);
@@ -1492,7 +1522,7 @@ void printMagData() {
 }
 
 void printRollPitchYaw() {
-    if (current_time - print_counter > 10000) {
+    if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("roll: "));
     Serial.print(roll_IMU);
@@ -1504,7 +1534,7 @@ void printRollPitchYaw() {
 }
 
 void printPIDoutput() {
-    if (current_time - print_counter > 10000) {
+    if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("roll_PID: "));
     Serial.print(roll_PID);
@@ -1516,7 +1546,7 @@ void printPIDoutput() {
 }
 
 void printMotorCommands() {
-    if (current_time - print_counter > 10000) {
+    if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("m1_command: "));
     Serial.print(m1_command_PWM);
@@ -1534,7 +1564,7 @@ void printMotorCommands() {
 }
 
 void printServoCommands() {
-    if (current_time - print_counter > 10000) {
+    if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("s1_command: "));
     Serial.print(s1_command_PWM);
@@ -1554,12 +1584,143 @@ void printServoCommands() {
 }
 
 void printLoopRate() {
-    if (current_time - print_counter > 10000) {
+    if (current_time - print_counter > SERIAL_OUTPUT_INTERVAL) {
     print_counter = micros();
     Serial.print(F("dt = "));
     Serial.println(dt*1000000.0);
   }
 }
+
+#ifdef SERIAL_WEBSERVER
+
+void setupdRehmVars() {
+    // i=int; f=float; c=charArray  - capitalising makes them readonly
+    // D=divider/header; X=end 
+    int v = 0;
+    dRehmVarType[v]='D'; dRehmVarName[v] = "HEADER"; v++;
+    dRehmVarType[v]='i'; dRehmVarName[v] = "serialTesti"; dRehmIntPtr[v] = serialTesti; v++;
+    dRehmVarType[v]='D'; dRehmVarName[v] = "DIV/HEAD"; v++;
+    dRehmVarType[v]='f'; dRehmVarName[v] = "serialTestf"; dRehmFloatPtr[v] = serialTesti; v++;
+    dRehmVarType[v]='c'; dRehmVarName[v] = "serialTestc"; dRehmStrPtr[v] = serialTesti; v++;
+    dRehmVarType[v]='X'; 
+    dRehmVariableCnt = v;    
+}
+
+void setupWebserver() {
+    setupdRehmVars();
+    
+    int pingCount = 0;
+    while (Serial6.read() != '.') {
+        Serial6.print('.');
+        pingCount++;
+        if (pingCount > WEBSERVER_PING_RETRIES) {
+            webserverOK = false;
+            return;
+        }
+        delay(100);     // wait 100ms before next try
+    }
+    Serial6.write('\n');
+    //request the webserver to add these variables to webpage
+    for (int i=0; i<=dRehmVariableCnt; i++) {
+        //The comma is required to separate the name of the char from it's initial value
+        Serial6.write(dRehmVarType[i]);
+        Serial6.write(dRehmVarName[i]);
+        Serial6.write('=');
+        if (dRehmVarType[i] =='i' or dRehmVarType[i] =='I') {
+            Serial6.write(dRehmIntPtr[i]);
+        } else if (dRehmVarType[i] =='f' or dRehmVarType[i] =='F')
+            Serial6.write(dRehmFloatPtr[i]);
+        } else if (dRehmVarType[i] =='f' or dRehmVarType[i] =='F')
+            Serial6.write(dRehmStrPtr[i]);
+        }
+        Serial6.write('\n');         // tell the webserver we're finished that variable
+    }
+    Serial6.write('X');         // tell the webserver we're finished setup
+}
+
+updateWebserverActions() {
+    //This keeps reading data into serialBuffer until an end is reached - then it processes it
+    static byte serialBuffer[255];
+    static int endChr = 0;
+    
+    int incomingByte = Serial6.read(); // for incoming serial data
+    // if there's no data then return
+    if (incomingByte == -1)
+        return;
+    // end of packet is indicated by a '\n'
+    while (incomingByte != '\n' and incomingByte != -1 and endChr < 255) {
+        serialBuffer[endChr] = incomingByte;
+        incomingByte = Serial6.read();
+        endChr++;
+    }
+    if (endChr >=255) {
+        endChr = 0;     // packets over 255 characters are not allowed, just dump and reset
+        return;
+    }
+    if (incomingByte != '\n')
+        return;
+
+    int equalsLoc = 0;
+    while (equalsLoc < 255) {
+        if (serialBuffer[equalsLoc] == '=')
+            break;
+        equalsLoc++;
+    }
+
+    if (equalsLoc >=255) {
+        endChr = 0;             // packets must contain an '=' character. If it doesn't then just dump and reset
+        return;
+    }
+
+    serialBuffer[equalsLoc] = '\0';     // convert the '=' sign to a string end so strcmp identifies the correct code
+
+
+    if (serialBuffer[0] == 'G' and serialBuffer[1] == 'E' and serialBuffer[2] == 'T') {
+        //GET THE VARIABLE AND RETURN IT'S CURRENT VALUE VIA SERIAL
+        if (strcmp(serialBuffer, "GETserialTesti") Serial6.write(serialTesti);
+        if (strcmp(serialBuffer, "GETserialTestf") Serial6.write(serialTestf);
+        if (strcmp(serialBuffer, "GETserialTestc") Serial6.write(serialTestc);
+    }
+
+    
+    // if we've got here we probably want to SET the variable value
+    // so extract the value to set it to from the serialBuffer
+    int intFromSerial = 0;
+    float floatFromSerial = 0.0f;
+    mult = 1;
+    for (int i = endChr; i > equalsLoc; i--)
+    {
+        if (serialBuffer[i] == '-') {
+            intFromSerial = -1 * intFromSerial;
+        } else if (serialBuffer[i] == '.') {        // decimal point makes it a float, so add it to the float and clear the current int 
+            floatFromSerial = intFromSerial / mult;
+            intFromSerial = 0;
+        } else {
+            intFromSerial += (serialBuffer[i] - '0') * mult;        // convert a char to it's numeric equivalent
+            mult *= 10; // mult is used to get ones, tens, hundreds and thousands
+        }    
+    }
+    floatFromSerial += intFromSerial;
+
+    // UPDATE THE VARIABLE
+    if (serialBuffer[0] == 'S' and serialBuffer[1] == 'E' and serialBuffer[2] == 'T') {
+        if (strcmp(serialBuffer, "SETserialTesti") serialTesti = intFromSerial;
+        if (strcmp(serialBuffer, "SETserialTestf") serialTestf = floatFromSerial;
+        if (strcmp(serialBuffer, "SETserialTestc") 
+            strncpy ( char * serialTestc, serialBuffer[equalsLoc + 1], endChr - equalsLoc );      
+    }
+    if (serialBuffer[0] == '+') {
+        if (strcmp(serialBuffer, "+serialTesti") serialTesti += intFromSerial;
+        if (strcmp(serialBuffer, "+serialTestf") serialTestf += floatFromSerial;
+    }
+    if (serialBuffer[0] == '-') {
+        if (strcmp(serialBuffer, "-serialTesti") serialTesti -= intFromSerial;
+        if (strcmp(serialBuffer, "-serialTestf") serialTestf -= floatFromSerial;
+    }
+
+    curChr = 0;     //Current packet is processed so reset ready for the next one
+}
+#endif
 
 //=========================================================================================//
 
