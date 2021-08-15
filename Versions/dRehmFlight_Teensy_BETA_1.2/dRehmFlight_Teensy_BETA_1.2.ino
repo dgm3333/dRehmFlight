@@ -312,6 +312,7 @@ String dRehmVarType[MAX_DREHM_VARIABLES];
 String dRehmVarName[MAX_DREHM_VARIABLES];
 int* dRehmIntPtr[MAX_DREHM_VARIABLES];
 float* dRehmFloatPtr[MAX_DREHM_VARIABLES];
+float* dRehmIncrementValues[MAX_DREHM_VARIABLES];
 char* dRehmStrPtr[MAX_DREHM_VARIABLES];
 int dRehmVariableCnt = 0;
 
@@ -1592,15 +1593,16 @@ void printLoopRate() {
 }
 
 #ifdef SERIAL_WEBSERVER
+#define FLOATMIN = -3.4028235E+38
 
 void setupdRehmVars() {
     // i=int; f=float; c=charArray  - capitalising makes them readonly
     // D=divider/header; X=end 
     int v = 0;
     dRehmVarType[v]='D'; dRehmVarName[v] = "HEADER"; v++;
-    dRehmVarType[v]='i'; dRehmVarName[v] = "serialTesti"; dRehmIntPtr[v] = serialTesti; v++;
+    dRehmVarType[v]='i'; dRehmVarName[v] = "serialTesti"; dRehmIntPtr[v] = serialTesti; dRehmIncrementValues[v] = 1; v++;
     dRehmVarType[v]='D'; dRehmVarName[v] = "DIV/HEAD"; v++;
-    dRehmVarType[v]='f'; dRehmVarName[v] = "serialTestf"; dRehmFloatPtr[v] = serialTesti; v++;
+    dRehmVarType[v]='f'; dRehmVarName[v] = "serialTestf"; dRehmFloatPtr[v] = serialTesti; dRehmIncrementValues[v] = 0.1f; v++;
     dRehmVarType[v]='c'; dRehmVarName[v] = "serialTestc"; dRehmStrPtr[v] = serialTesti; v++;
     dRehmVarType[v]='X'; 
     dRehmVariableCnt = v;    
@@ -1638,87 +1640,111 @@ void setupWebserver() {
     Serial6.write('X');         // tell the webserver we're finished setup
 }
 
-updateWebserverActions() {
-    //This keeps reading data into serialBuffer until an end is reached - then it processes it
-    static byte serialBuffer[255];
-    static int endChr = 0;
-    
-    int incomingByte = Serial6.read(); // for incoming serial data
-    // if there's no data then return
-    if (incomingByte == -1)
-        return;
-    // end of packet is indicated by a '\n'
-    while (incomingByte != '\n' and incomingByte != -1 and endChr < 255) {
-        serialBuffer[endChr] = incomingByte;
-        incomingByte = Serial6.read();
-        endChr++;
-    }
-    if (endChr >=255) {
-        endChr = 0;     // packets over 255 characters are not allowed, just dump and reset
-        return;
-    }
-    if (incomingByte != '\n')
-        return;
-
-    int equalsLoc = 0;
-    while (equalsLoc < 255) {
-        if (serialBuffer[equalsLoc] == '=')
-            break;
-        equalsLoc++;
-    }
-
-    if (equalsLoc >=255) {
-        endChr = 0;             // packets must contain an '=' character. If it doesn't then just dump and reset
-        return;
-    }
-
-    serialBuffer[equalsLoc] = '\0';     // convert the '=' sign to a string end so strcmp identifies the correct code
-
-
-    if (serialBuffer[0] == 'G' and serialBuffer[1] == 'E' and serialBuffer[2] == 'T') {
-        //GET THE VARIABLE AND RETURN IT'S CURRENT VALUE VIA SERIAL
-        if (strcmp(serialBuffer, "GETserialTesti") Serial6.write(serialTesti);
-        if (strcmp(serialBuffer, "GETserialTestf") Serial6.write(serialTestf);
-        if (strcmp(serialBuffer, "GETserialTestc") Serial6.write(serialTestc);
-    }
-
-    
-    // if we've got here we probably want to SET the variable value
-    // so extract the value to set it to from the serialBuffer
-    int intFromSerial = 0;
+float numFromCharArr(char& charArr, int& startChr, int& endChr) {
+    if (startChr == endChr)
+        return FLOATMIN;
+    int mult = 1;
     float floatFromSerial = 0.0f;
-    mult = 1;
-    for (int i = endChr; i > equalsLoc; i--)
+    for (int i = endChr; i > startChr; i--)
     {
         if (serialBuffer[i] == '-') {
-            intFromSerial = -1 * intFromSerial;
-        } else if (serialBuffer[i] == '.') {        // decimal point makes it a float, so add it to the float and clear the current int 
-            floatFromSerial = intFromSerial / mult;
-            intFromSerial = 0;
+            floatFromSerial = -1 * floatFromSerial;
+        } else if (serialBuffer[i] == '.') {        // decimal point so divide to move the dp and reset multip to 1
+            floatFromSerial = floatFromSerial / mult;
+            mult = 1;
         } else {
-            intFromSerial += (serialBuffer[i] - '0') * mult;        // convert a char to it's numeric equivalent
-            mult *= 10; // mult is used to get ones, tens, hundreds and thousands
+            floatFromSerial += (charArr[i] - '0') * mult;        // convert a char to it's numeric equivalent
+            mult *= 10; // mult is used to get ones, tens, hundreds, thousands, etc
         }    
     }
-    floatFromSerial += intFromSerial;
+    return floatFromSerial;
+}
 
-    // UPDATE THE VARIABLE
-    if (serialBuffer[0] == 'S' and serialBuffer[1] == 'E' and serialBuffer[2] == 'T') {
-        if (strcmp(serialBuffer, "SETserialTesti") serialTesti = intFromSerial;
-        if (strcmp(serialBuffer, "SETserialTestf") serialTestf = floatFromSerial;
-        if (strcmp(serialBuffer, "SETserialTestc") 
-            strncpy ( char * serialTestc, serialBuffer[equalsLoc + 1], endChr - equalsLoc );      
-    }
-    if (serialBuffer[0] == '+') {
-        if (strcmp(serialBuffer, "+serialTesti") serialTesti += intFromSerial;
-        if (strcmp(serialBuffer, "+serialTestf") serialTestf += floatFromSerial;
-    }
-    if (serialBuffer[0] == '-') {
-        if (strcmp(serialBuffer, "-serialTesti") serialTesti -= intFromSerial;
-        if (strcmp(serialBuffer, "-serialTestf") serialTestf -= floatFromSerial;
+
+void updateWebserverActions() {
+    //This keeps reading data into serialBuffer until an end is reached - then it processes it
+    const int SB_SIZE = 10;
+    const int NEW_PACKET = -1;
+    const int FAILED_PACKET = -2;
+    
+    static char serialBuffer[SB_SIZE];
+    static int endChr = -1;
+    static char actionType = '\0'
+    static int varID = NEW_PACKET;
+    static float varVal = FLOATMIN;
+        
+    int incomingByte = Serial6.read(); // for incoming serial data
+    if (incomingByte == -1)    // if there's no data then return
+        return;
+
+    // just read to the end of a failed packet and dump the data
+    while (incomingByte != -1 and endChr == FAILED_PACKET) {
+        if (incomingByte == '\n')
+            endChr == NEW_PACKET;
+        incomingByte = Serial6.read(); // for incoming serial data
     }
 
-    curChr = 0;     //Current packet is processed so reset ready for the next one
+    // process incoming data into appropriate var
+    while (incomingByte != -1 and endChr < SB_SIZE) {
+        if (endChr == -1) {
+            actionType = incomingByte;
+            endChr = 0;
+        }
+        else if (incomingByte == '=') {
+            varID = numFromCharArr(serialBuffer, 0, endChr)
+            endChr = 0;
+        }
+        else if (incomingByte == '\n') {    // end of packet is indicated by a '\n'
+            if (dRehmVarType[varID] == 'i' or dRehmVarType[varID] == 'f')
+                varVal = numFromCharArr(serialBuffer, 0, endChr)
+            break;
+        }
+        else {        
+            serialBuffer[endChr] = incomingByte;
+            endChr++;
+        }
+        incomingByte = Serial6.read();
+    }
+    if (endChr >= SB_SIZE) {
+        endChr = FAILED_PACKET;     // packets over SB_SIZE characters are not allowed, just dump and reset
+        return;
+    }
+    if (incomingByte != '\n')       // we haven't got to the end of the packet so return to the main loop to allow other processing while waiting for it to arrive
+        return;
+
+
+    
+    if (actionType == 'G') {     //GET THE VARIABLE AND RETURN IT'S CURRENT VALUE VIA SERIAL
+        Serial6.write(dRehmFloatPtr[varID]);
+    }
+    else if (actionType == 'S') { // UPDATE THE VARIABLE
+        if (dRehmVarType[varID] == 'i') {
+            dRehmIntPtr[varID] = (int)varVal;
+        } else if (dRehmVarType[varID] == 'f') {
+            dRehmFloatPtr[varID] = varVal;
+        } else if (dRehmVarType[varID] == 'c') {
+            strncpy(dRehmStrPtr[varID], serialBuffer, endChr);
+        }
+    }
+
+    if (actionType == '+') {
+         if (dRehmVarType[varID] == 'i') {
+            dRehmIntPtr[varID] += (int)dRehmIncrementValues[varID];
+        } else if (dRehmVarType[varID] == 'f') {
+            dRehmFloatPtr[varID] += dRehmIncrementValues[varID];
+        }
+    }
+    if (actionType == '-') {
+         if (dRehmVarType[varID] == 'i') {
+            dRehmIntPtr[varID] -= (int)dRehmIncrementValues[varID];
+        } else if (dRehmVarType[varID] == 'f') {
+            dRehmFloatPtr[varID] -= dRehmIncrementValues[varID];
+        }
+    }
+
+    endChr = NEW_PACKET;     //Current packet is processed so reset ready for the next one
+    varID = NEW_PACKET;
+    action = '\0'
 }
 #endif
 
