@@ -64,17 +64,20 @@ AsyncWebServer server(80);
 
 // Variable to store the HTTP request
 String header;
+String message;
+
 String dRehmVarType[MAX_DREHM_VARIABLES];
 String dRehmVarName[MAX_DREHM_VARIABLES];
 int dRehmIntValues[MAX_DREHM_VARIABLES];
 float dRehmFloatValues[MAX_DREHM_VARIABLES];
+float dRehmIncrementValues[MAX_DREHM_VARIABLES];
 String dRehmStrValues[MAX_DREHM_VARIABLES];
 int dRehmVariableCnt = 0;
 
 // Create the html for a webpage which is served to anything connecting to the url
 void handleRoot() {
   
-  String message = "";
+  message = "";
 
   // This is standard html response - if you don't return status 200 (ie OK) then the flutter app will thow an exception
   //   and the returned json won't be parsed
@@ -120,35 +123,27 @@ void handleRoot() {
   message += "    <p>Please select a function below.</p>\n";
   message += "   <div\">\n";
   for (int i = 0; i < dRehmVariableCnt; i++) {
-    if (dRehmVarType[i] = 'D') { 
+    if (dRehmVarType[i] == 'D') {        // end the div and add the "variable name" as the text to display
       message += "   </div>\n";        
       message += "   <div\">\n";
       message += "    <p>" + dRehmVarName[i] + "</p>\n";
-    } else if (dRehmVarType[i] = 'i') { 
+    } else if (dRehmVarType[i] == 'c') { 
       message += "    <p>" + dRehmVarName[i] + ":\n";
-      message += "    document.getElementById('" + dRehmVarName[i] + "').innerHTML = " + dRehmVarName[i] + "\n"
+      message += "    document.getElementById('" + dRehmVarName[i] + "').innerHTML = " + dRehmStrValues[i] + "\n"
       message += "    <button onclick=\"bClk('GET', " + String(i) + ")\" class=\"btn btn-light center-block\">GET</button>\n";
       message += "    <button onclick=\"bClk('SET', " + String(i) + ", document.getElementById('" + dRehmVarName[i] + "').value)\" class=\"btn btn-dark center-block\">SET</button>\n";
       message += "    <input type='text' id='" + dRehmVarName[i] + "' value=document.getElementById('" + dRehmVarName[i] + "').value>\n";
-      message += "    <button onclick=\"bClk('PLUS', " + String(i) + ", 1)\" class=\"btn btn-success center-block\">+1</button>\n";
-      message += "    <button onclick=\"bClk('MINUS', " + String(i) + ", 1)\" class=\"btn btn-success center-block\">-1</button>\n";
-      message += "    </p></br>\n";
-    
+    } else if (dRehmVarType[i] == 'i' or dRehmVarType[i] == 'f') { 
       message += "    <p>" + dRehmVarName[i] + ":\n";
-      message += "    <button onclick=\"bClk('GET', '//SerialTestf')\" class=\"btn btn-light center-block\">GET</button>\n";
-      message += "    <input type='text' id='SerialTestf' value=16.3>\n";
-      message += "    <button onclick=\"bClk('SET', " + String(i) + ", 16.3)\" class=\"btn btn-dark center-block\">SET</button>\n";
-      message += "    <button onclick=\"bClk('PLUS', '//SerialTestf', 0.1)\" class=\"btn btn-success center-block\">+0.1</button>\n";
-      message += "    <button onclick=\"bClk('MINUS', '//SerialTestf', 0.1)\" class=\"btn btn-success center-block\">-0.1</button>\n";
+      message += "    document.getElementById('" + dRehmVarName[i] + "').innerHTML = " + dRehmFloatValues[i] + "\n"
+      message += "    <button onclick=\"bClk('GET', " + String(i) + "'G')\" class=\"btn btn-light center-block\">GET</button>\n";
+      message += "    <button onclick=\"bClk('SET', " + String(i) + ", document.getElementById('" + dRehmVarName[i] + "').value)\" class=\"btn btn-dark center-block\">SET</button>\n";
+      message += "    <input type='text' id='" + dRehmVarName[i] + "' value=document.getElementById('" + dRehmVarName[i] + "').value>\n";
+      message += "    <button onclick=\"bClk('PLUS', " + String(i) + ", '+')\" class=\"btn btn-success center-block\">+" + dRehmIncrementValues[i] + "</button>\n";
+      message += "    <button onclick=\"bClk('MINUS', " + String(i) + ", '-')\" class=\"btn btn-success center-block\">-" + dRehmIncrementValues[i] + "</button>\n";
       message += "    </p></br>\n";
-    
-      message += "    <p>" + dRehmVarName[i] + ":\n";
-      message += "    <button onclick=\"bClk('GET', '//SerialTestc')\" class=\"btn btn-light center-block\">GET</button>\n";
-      message += "    <button onclick=\"bClk('SET', '//SerialTestc', 'testChar')\" class=\"btn btn-dark center-block\">SET</button>\n";
-      message += "    <input type='text' id='SerialTestc' value='testChar'>\n";
-      message += "    </p></br>\n";
+    }
   }
-
   message += "    </br></br>\n";
   message += "   </div>\n";
 
@@ -162,18 +157,17 @@ void handleRoot() {
   message += "      var nextInterval = 0;\n";
   message += "\n";
   message += "      // buttonClick event\n";
-  message += "      function bClk(btn, var, val='') {\n";
+  message += "      function bClk(btn, id, val='') {\n";
   message += "        var now = new Date().getTime();\n";
   message += "        var interval = now - oldTime;\n";       // Find the interval between now and the count down date
   message += "        oldTime = now;\n";
-//  message += "        document.getElementById(\"var1\").innerHTML = interval;\n";
   message += "        if (interval < nextInterval) return;\n";
   message += "        nextInterval = 1000;\n";
   message += "\n";
   // end of debounce code
                     
 
-  message += "        var url = \"/\" + btn + "?var=\" + var + "?val=\" + val;\n";
+  message += "        var url = \"/\" + btn + "?id=\" + id + "?val=\" + val;\n";
 
   message += "        var request = new XMLHttpRequest();\n";
   message += "        request.open('GET', url, true);\n";
@@ -195,15 +189,15 @@ void handleRoot() {
 
 // Callback when a 'Val' button is pushed
 void handleGET() {
-  Serial2.print("GET");
-  Serial2.print(server.arg("var"));   // This is the variable name
+  Serial2.print("G");
+  Serial2.print(server.arg("id"));   // This is the variable name
   Serial2.print("=");
   Serial2.print('\n');            // End the packet
   server.send(200, "text/plain", "OK");       //Response to the HTTP request
 }
 void handleSET() {
-  Serial2.print("SET");
-  Serial2.print(server.arg("var"));   // This is the variable name
+  Serial2.print("S");
+  Serial2.print(server.arg("id"));   // This is the variable name
   Serial2.print("=");
   Serial2.print(server.arg("val"));   // This is the value to update it with
   Serial2.print('\n');            // End the packet
@@ -211,7 +205,7 @@ void handleSET() {
 }
 void handlePLUS() {
   Serial2.print("+");
-  Serial2.print(server.arg("var"));   // This is the variable name
+  Serial2.print(server.arg("id"));   // This is the variable name
   Serial2.print("=");
   Serial2.print(server.arg("val"));   // This is the value to update it with
   Serial2.print('\n');            // End the packet
@@ -263,7 +257,7 @@ void setupWebserver() {
         }
     }
     if (dRehmVarType[dRehmVariableCnt] == 'i') {
-        dRehmIntValues[dRehmVariableCnt] = stoi(valStr);
+        dRehmFloatValues[dRehmVariableCnt] = stoi(valStr);      // don't think any benefit in using dRehmIntValues
     } else if (dRehmVarType[dRehmVariableCnt] == 'f') {
         dRehmFloatValues[dRehmVariableCnt] = stof(valStr);
     } else {
