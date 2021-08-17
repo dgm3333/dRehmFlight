@@ -82,6 +82,7 @@ RcGroups 'jihlein' - IMU implementation overhaul + SBUS implementation
 #include <Wire.h>     //I2c communication
 #include <SPI.h>      //SPI communication
 #include <PWMServo.h> //commanding any extra actuators, installed with teensyduino installer
+//#include "./radioComm.h"
 
 #if defined USE_SBUS_RX
   #include "src/SBUS/SBUS.h"   //sBus interface
@@ -97,7 +98,14 @@ RcGroups 'jihlein' - IMU implementation overhaul + SBUS implementation
   #error No MPU defined... 
 #endif
 
+//========================================================================================================================//
 
+// Advance declarations
+void radioSetup();
+float invSqrt(float x);
+unsigned long getRadioPWM(int ch_num);
+
+void updateWebserverActions();
 
 //========================================================================================================================//
 
@@ -312,14 +320,14 @@ String dRehmVarType[MAX_DREHM_VARIABLES];
 String dRehmVarName[MAX_DREHM_VARIABLES];
 int* dRehmIntPtr[MAX_DREHM_VARIABLES];
 float* dRehmFloatPtr[MAX_DREHM_VARIABLES];
-float* dRehmIncrementValues[MAX_DREHM_VARIABLES];
-char* dRehmStrPtr[MAX_DREHM_VARIABLES];
+float dRehmIncrementValues[MAX_DREHM_VARIABLES];
+String* dRehmStrPtr[MAX_DREHM_VARIABLES];
 int dRehmVariableCnt = 0;
 
 // used for testing of webserver initial setup 
 int serialTesti = 0;
 float serialTestf = 0.0f;
-char serialTestc[10];
+String serialTests;
 #endif
 
 //========================================================================================================================//
@@ -1315,7 +1323,7 @@ float floatFaderLinear(float param, float param_min, float param_max, float fade
   return param;
 }
 
-float switchRollYaw(int reverseRoll, int reverseYaw) {
+void switchRollYaw(int reverseRoll, int reverseYaw) {
   //DESCRIPTION: Switches roll_des and yaw_des variables for tailsitter-type configurations
   /*
    * Takes in two integers (either 1 or -1) corresponding to the desired reversing of the roll axis and yaw axis, respectively.
@@ -1593,17 +1601,17 @@ void printLoopRate() {
 }
 
 #ifdef SERIAL_WEBSERVER
-#define FLOATMIN = -3.4028235E+38
+const float FLOATMIN = -3.4028235E+38;
 
 void setupdRehmVars() {
     // i=int; f=float; c=charArray  - capitalising makes them readonly
     // D=divider/header; X=end 
     int v = 0;
     dRehmVarType[v]='D'; dRehmVarName[v] = "HEADER"; v++;
-    dRehmVarType[v]='i'; dRehmVarName[v] = "serialTesti"; dRehmIntPtr[v] = serialTesti; dRehmIncrementValues[v] = 1; v++;
+    dRehmVarType[v]='i'; dRehmVarName[v] = "serialTesti"; dRehmIntPtr[v] = &serialTesti; dRehmIncrementValues[v] = 1.0f; v++;
     dRehmVarType[v]='D'; dRehmVarName[v] = "DIV/HEAD"; v++;
-    dRehmVarType[v]='f'; dRehmVarName[v] = "serialTestf"; dRehmFloatPtr[v] = serialTesti; dRehmIncrementValues[v] = 0.1f; v++;
-    dRehmVarType[v]='c'; dRehmVarName[v] = "serialTestc"; dRehmStrPtr[v] = serialTesti; v++;
+    dRehmVarType[v]='f'; dRehmVarName[v] = "serialTestf"; dRehmFloatPtr[v] = &serialTestf; dRehmIncrementValues[v] = 0.1f; v++;
+    dRehmVarType[v]='c'; dRehmVarName[v] = "serialTests"; dRehmStrPtr[v] = &serialTests; v++;
     dRehmVarType[v]='X'; 
     dRehmVariableCnt = v;    
 }
@@ -1621,35 +1629,35 @@ void setupWebserver() {
         }
         delay(100);     // wait 100ms before next try
     }
-    Serial6.write('\n');
+    Serial6.print('\n');
     //request the webserver to add these variables to webpage
     for (int i=0; i<=dRehmVariableCnt; i++) {
         //The comma is required to separate the name of the char from it's initial value
-        Serial6.write(dRehmVarType[i]);
-        Serial6.write(dRehmVarName[i]);
-        Serial6.write('=');
+        Serial6.print(dRehmVarType[i]);
+        Serial6.print(dRehmVarName[i]);
+        Serial6.print('=');
         if (dRehmVarType[i] =='i' or dRehmVarType[i] =='I') {
-            Serial6.write(dRehmIntPtr[i]);
-        } else if (dRehmVarType[i] =='f' or dRehmVarType[i] =='F')
-            Serial6.write(dRehmFloatPtr[i]);
-        } else if (dRehmVarType[i] =='f' or dRehmVarType[i] =='F')
-            Serial6.write(dRehmStrPtr[i]);
+            Serial6.print(*dRehmIntPtr[i]);
+        } else if (dRehmVarType[i] =='f' or dRehmVarType[i] =='F') {
+            Serial6.print(*dRehmFloatPtr[i]);
+        } else if (dRehmVarType[i] =='f' or dRehmVarType[i] =='F') {
+            Serial6.print(*dRehmStrPtr[i]);
         }
-        Serial6.write('\n');         // tell the webserver we're finished that variable
+        Serial6.print('\n');         // tell the webserver we're finished that variable
     }
-    Serial6.write('X');         // tell the webserver we're finished setup
+    Serial6.print('X');         // tell the webserver we're finished setup
 }
 
-float numFromCharArr(char& charArr, int& startChr, int& endChr) {
+float numFromCharArr(char charArr[], int startChr, int endChr) {
     if (startChr == endChr)
         return FLOATMIN;
     int mult = 1;
     float floatFromSerial = 0.0f;
     for (int i = endChr; i > startChr; i--)
     {
-        if (serialBuffer[i] == '-') {
+        if (charArr[i] == '-') {
             floatFromSerial = -1 * floatFromSerial;
-        } else if (serialBuffer[i] == '.') {        // decimal point so divide to move the dp and reset multip to 1
+        } else if (charArr[i] == '.') {        // decimal point so divide to move the dp and reset multip to 1
             floatFromSerial = floatFromSerial / mult;
             mult = 1;
         } else {
@@ -1669,7 +1677,7 @@ void updateWebserverActions() {
     
     static char serialBuffer[SB_SIZE];
     static int endChr = -1;
-    static char actionType = '\0'
+    static char actionType = '\0';
     static int varID = NEW_PACKET;
     static float varVal = FLOATMIN;
         
@@ -1680,7 +1688,7 @@ void updateWebserverActions() {
     // just read to the end of a failed packet and dump the data
     while (incomingByte != -1 and endChr == FAILED_PACKET) {
         if (incomingByte == '\n')
-            endChr == NEW_PACKET;
+            endChr = NEW_PACKET;
         incomingByte = Serial6.read(); // for incoming serial data
     }
 
@@ -1691,12 +1699,12 @@ void updateWebserverActions() {
             endChr = 0;
         }
         else if (incomingByte == '=') {
-            varID = numFromCharArr(serialBuffer, 0, endChr)
+            varID = numFromCharArr(serialBuffer, 0, endChr);
             endChr = 0;
         }
         else if (incomingByte == '\n') {    // end of packet is indicated by a '\n'
             if (dRehmVarType[varID] == 'i' or dRehmVarType[varID] == 'f')
-                varVal = numFromCharArr(serialBuffer, 0, endChr)
+                varVal = numFromCharArr(serialBuffer, 0, endChr);
             break;
         }
         else {        
@@ -1715,36 +1723,36 @@ void updateWebserverActions() {
 
     
     if (actionType == 'G') {     //GET THE VARIABLE AND RETURN IT'S CURRENT VALUE VIA SERIAL
-        Serial6.write(dRehmFloatPtr[varID]);
+        Serial6.print(*dRehmFloatPtr[varID]);
     }
     else if (actionType == 'S') { // UPDATE THE VARIABLE
         if (dRehmVarType[varID] == 'i') {
-            dRehmIntPtr[varID] = (int)varVal;
+            *dRehmIntPtr[varID] = (int)varVal;
         } else if (dRehmVarType[varID] == 'f') {
-            dRehmFloatPtr[varID] = varVal;
+            *dRehmFloatPtr[varID] = varVal;
         } else if (dRehmVarType[varID] == 'c') {
-            strncpy(dRehmStrPtr[varID], serialBuffer, endChr);
+            //strncpy(*dRehmStrPtr[varID], serialBuffer, endChr);
         }
     }
 
     if (actionType == '+') {
          if (dRehmVarType[varID] == 'i') {
-            dRehmIntPtr[varID] += (int)dRehmIncrementValues[varID];
+            *dRehmIntPtr[varID] += (int)dRehmIncrementValues[varID];
         } else if (dRehmVarType[varID] == 'f') {
-            dRehmFloatPtr[varID] += dRehmIncrementValues[varID];
+            *dRehmFloatPtr[varID] += dRehmIncrementValues[varID];
         }
     }
     if (actionType == '-') {
          if (dRehmVarType[varID] == 'i') {
-            dRehmIntPtr[varID] -= (int)dRehmIncrementValues[varID];
+            *dRehmIntPtr[varID] -= (int)dRehmIncrementValues[varID];
         } else if (dRehmVarType[varID] == 'f') {
-            dRehmFloatPtr[varID] -= dRehmIncrementValues[varID];
+            *dRehmFloatPtr[varID] -= dRehmIncrementValues[varID];
         }
     }
 
     endChr = NEW_PACKET;     //Current packet is processed so reset ready for the next one
     varID = NEW_PACKET;
-    action = '\0'
+    actionType = '\0';
 }
 #endif
 

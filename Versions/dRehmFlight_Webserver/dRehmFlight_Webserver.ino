@@ -21,6 +21,10 @@
     a. Edit handleRoot() under ADD NEW BUTTONS add appropriate variable options (GET,SET,PLUS,MINUS)
 
 
+// Search in your wifi settings for "dRehmFlight Webserver"
+// Then in your browser type the root IP address: 192.168.1.1
+
+
 //Hardware Connections (Serial pins)
 //Teensy has numerous Serial/UART pin options https://www.pjrc.com/teensy/td_uart.html 
 // By default dRehmFlight uses the pins for Serial 1-4 for other purposes and Serial5 for SBUS
@@ -50,29 +54,51 @@ Code the client to hold the connection open even when the webserver is out of ra
 // Load Wi-Fi library
 #ifdef ESP32
 #include <WiFi.h>
+#include <WebServer.h>
+
+//AsyncWebServer requires the following libraries.
+// Download them using the links then install from Arduino under Sketch > Include Library > Add .zip Library
+//https://github.com/me-no-dev/ESPAsyncWebServer/archive/master.zip
+//https://github.com/me-no-dev/AsyncTCP/archive/master.zip
+//#include <AsyncTCP.h>
+//#include <ESPAsyncWebServer.h>
+
+
+//#include <ArduinoOTA.h>   // required for OTA updates (but this sketch is too big on an ESP8266
+
 #else
 #include <ESP8266WiFi.h>
+#include <WiFiServer.h>
 #endif
 
 
 // Replace with your network credentials
-const char* ssid     = "dRehmFlight webserver";
+const char* ssid     = "dRehmFlight Webserver";
 const char* password = "123456789";
 
 // Create AsyncWebServer object on port 80
-AsyncWebServer server(80);
+//AsyncWebServer server(80);
+
+/* Put IP Address details */
+IPAddress local_ip(192,168,1,1);
+IPAddress gateway(192,168,1,1);
+IPAddress subnet(255,255,255,0);
+
+WebServer server(80);
 
 // Variable to store the HTTP request
 String header;
 String message;
 
-String dRehmVarType[MAX_DREHM_VARIABLES];
+char dRehmVarType[MAX_DREHM_VARIABLES];
 String dRehmVarName[MAX_DREHM_VARIABLES];
 int dRehmIntValues[MAX_DREHM_VARIABLES];
 float dRehmFloatValues[MAX_DREHM_VARIABLES];
 float dRehmIncrementValues[MAX_DREHM_VARIABLES];
 String dRehmStrValues[MAX_DREHM_VARIABLES];
 int dRehmVariableCnt = 0;
+bool webserverOK = false;
+
 
 // Create the html for a webpage which is served to anything connecting to the url
 void handleRoot() {
@@ -129,13 +155,13 @@ void handleRoot() {
       message += "    <p>" + dRehmVarName[i] + "</p>\n";
     } else if (dRehmVarType[i] == 'c') { 
       message += "    <p>" + dRehmVarName[i] + ":\n";
-      message += "    document.getElementById('" + dRehmVarName[i] + "').innerHTML = " + dRehmStrValues[i] + "\n"
+      message += "    document.getElementById('" + dRehmVarName[i] + "').innerHTML = " + dRehmStrValues[i] + "\n";
       message += "    <button onclick=\"bClk('GET', " + String(i) + ")\" class=\"btn btn-light center-block\">GET</button>\n";
       message += "    <button onclick=\"bClk('SET', " + String(i) + ", document.getElementById('" + dRehmVarName[i] + "').value)\" class=\"btn btn-dark center-block\">SET</button>\n";
       message += "    <input type='text' id='" + dRehmVarName[i] + "' value=document.getElementById('" + dRehmVarName[i] + "').value>\n";
     } else if (dRehmVarType[i] == 'i' or dRehmVarType[i] == 'f') { 
       message += "    <p>" + dRehmVarName[i] + ":\n";
-      message += "    document.getElementById('" + dRehmVarName[i] + "').innerHTML = " + dRehmFloatValues[i] + "\n"
+      message += "    document.getElementById('" + dRehmVarName[i] + "').innerHTML = " + dRehmFloatValues[i] + "\n";
       message += "    <button onclick=\"bClk('GET', " + String(i) + "'G')\" class=\"btn btn-light center-block\">GET</button>\n";
       message += "    <button onclick=\"bClk('SET', " + String(i) + ", document.getElementById('" + dRehmVarName[i] + "').value)\" class=\"btn btn-dark center-block\">SET</button>\n";
       message += "    <input type='text' id='" + dRehmVarName[i] + "' value=document.getElementById('" + dRehmVarName[i] + "').value>\n";
@@ -157,7 +183,7 @@ void handleRoot() {
   message += "      var nextInterval = 0;\n";
   message += "\n";
   message += "      // buttonClick event\n";
-  message += "      function bClk(btn, id, val='') {\n";
+  message += "      function bClk(btn, argID, argVal='') {\n";
   message += "        var now = new Date().getTime();\n";
   message += "        var interval = now - oldTime;\n";       // Find the interval between now and the count down date
   message += "        oldTime = now;\n";
@@ -166,8 +192,7 @@ void handleRoot() {
   message += "\n";
   // end of debounce code
                     
-
-  message += "        var url = \"/\" + btn + "?id=\" + id + "?val=\" + val;\n";
+  message += "        var url = \"/btn?id=argID?val=argVal\";\n";
 
   message += "        var request = new XMLHttpRequest();\n";
   message += "        request.open('GET', url, true);\n";
@@ -220,16 +245,20 @@ void handleMINUS() {
   server.send(200, "text/plain", "OK");       //Response to the HTTP request
 }
 
+
+// This listens to the Teensy and sets up the buttons for the variables it requests
 void setupWebserver() {
     byte serialBuffer[255];
     int endChr = 0;
-    
+    String valStr = "";    
     int pingCount = 0;
+    webserverOK = true;
     while (Serial2.read() != '.') {
         Serial2.print('.');
         pingCount++;
         if (pingCount > WEBSERVER_PING_RETRIES) {
             webserverOK = false;
+            Serial.println("Failed to connect to dRehmFlight Teensy via Serial2. Please check connections");
             return;
         }
         delay(100);     // wait 100ms before next try
@@ -242,7 +271,7 @@ void setupWebserver() {
             break;   // we're done with setup
         char c = '\0';
         bool commaNotFound = true;
-        bool valStr = "";
+
         while (true) {       
             while (Serial2.available() < 1) delay(10);
             if (c == '\n') {
@@ -257,9 +286,9 @@ void setupWebserver() {
         }
     }
     if (dRehmVarType[dRehmVariableCnt] == 'i') {
-        dRehmFloatValues[dRehmVariableCnt] = stoi(valStr);      // don't think any benefit in using dRehmIntValues
+        dRehmFloatValues[dRehmVariableCnt] = valStr.toFloat();      // don't think any benefit in using dRehmIntValues
     } else if (dRehmVarType[dRehmVariableCnt] == 'f') {
-        dRehmFloatValues[dRehmVariableCnt] = stof(valStr);
+        dRehmFloatValues[dRehmVariableCnt] = valStr.toFloat();
     } else {
         dRehmStrValues[dRehmVariableCnt] = valStr;
     }
@@ -267,14 +296,16 @@ void setupWebserver() {
 }
 
 void setup() {
-  Serial2.begin(115200);
+  Serial.begin(115200);
   Serial2.begin(WEBSERVER_SERIAL_SPEED, SERIAL_8N1, U2_RXD, U2_TXD);
 
 
   // Connect to Wi-Fi network with SSID and password
   Serial.print("Connecting to ");
   Serial.println(ssid);
-  WiFi.begin(ssid, password);
+  WiFi.softAP(ssid, password);
+  WiFi.softAPConfig(local_ip, gateway, subnet);
+//  WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -295,7 +326,7 @@ void setup() {
   server.on("/SET", handleSET); //Associate the handler function to the path
   server.on("/PLUS", handlePLUS); //Associate the handler function to the path
   server.on("/MINUS", handleMINUS); //Associate the handler function to the path
-  server.on("/test", handleTest); //Associate the handler function to the path
+//  server.on("/test", handleTest); //Associate the handler function to the path
 
   server.begin(); //Start the server
   Serial.println("Server listening...");
@@ -304,41 +335,5 @@ void setup() {
 }
 
 void loop(){
-  WiFiClient client = server.available();   // Listen for incoming clients
-
-  if (client) {                             // If a new client connects,
-    Serial.println("New Client.");          // print a message out in the Serial port
-    String currentLine = "";                // make a String to hold incoming data from the client
-    while (client.connected()) {            // loop while the client's connected
-      if (client.available()) {             // if there's bytes to read from the client,
-        char c = client.read();             // read a byte, then
-        Serial.write(c);                    // print it out the Serial monitor
-        header += c;
-        if (c == '\n') {                    // if the byte is a newline character
-          // if the current line is blank, you got two newline characters in a row.
-          // that's the end of the client HTTP request, so send a response:
-          if (currentLine.length() == 0) {
-            // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
-            // and a content-type so the client knows what's coming, then a blank line:
-            client.println("HTTP/1.1 200 OK");
-            client.println("Content-type:text/html");
-            client.println("Connection: close");
-            client.println(); // The HTTP response ends with another blank line
-            // Break out of the while loop
-            break;
-          } else { // if you got a newline, then clear currentLine
-            currentLine = "";
-          }
-        } else if (c != '\r') {  // if you got anything else but a carriage return character,
-          currentLine += c;      // add it to the end of the currentLine
-        }
-      }
-    }
-    // Clear the header variable
-    header = "";
-    // Close the connection
-    client.stop();
-    Serial.println("Client disconnected.");
-    Serial.println("");
-  }
+  server.handleClient();
 }
